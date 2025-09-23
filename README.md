@@ -1,5 +1,6 @@
 # 25_world_of_mites
 Subjects proposal :
+
 -1 : What is the minimum infestation density required for effective predation? Is there a pest threshold above which predators become “active”?
 
 -2 : What would be the difference in behaviour between males and females in the presence of predators?
