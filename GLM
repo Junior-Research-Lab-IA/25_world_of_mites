@@ -1,1 +1,118 @@
+df <- read.csv2("C:/Mes Documents/Research project/Results finale.csv", stringsAsFactors = FALSE)
+
+df$Species   <- factor(trimws(df$Species))
+df$Arrived   <- as.integer(df$Arrived)
+df$Intensity <- as.integer(df$Intensity)
+
+# garder uniquement Intensity 0 à 4
+dfI <- subset(df, Intensity %in% 0:4)
+
+dfI$Intensity_f <- factor(dfI$Intensity,
+                          levels = 0:4,
+                          labels = c("I0_control",
+                                     "I1_prey5_urt0",
+                                     "I2_prey10_urt0",
+                                     "I3_prey5_urt1",
+                                     "I4_prey10_urt1"))
+
+# ===================== OUTIL : TEST CHI² (LR test) POUR UN FACTEUR =====================
+# Compare un modèle réduit vs un modèle complet (comme anova(..., test="Chisq"))
+chi2_lr <- function(mod_reduit, mod_complet, label=""){
+  tab <- anova(mod_reduit, mod_complet, test="Chisq")
+  cat("\n---", label, "---\n")
+  print(tab)
+  invisible(tab)
+}
+
+# ===================== 1) TABLEAU TAUX D'ARRIVEE (DESCRIPTIF) =====================
+prop_arrived <- aggregate(Arrived ~ Species + Intensity_f, data=dfI, FUN=mean)
+n_par_groupe <- aggregate(Arrived ~ Species + Intensity_f, data=dfI, FUN=length)
+names(n_par_groupe)[3] <- "N"
+res_par_groupe <- merge(prop_arrived, n_par_groupe, by=c("Species","Intensity_f"))
+names(res_par_groupe)[3] <- "Proportion_arrived"
+res_par_groupe[order(res_par_groupe$Species, res_par_groupe$Intensity_f), ]
+
+# =====================================================================================
+# 2) GLM "3 par 3" + TESTS CHI² (LR) : CALIFORNICUS et PERSIMILIS séparément
+#    On fait à chaque fois :
+#      - reg_full  : Arrived ~ groupe (3 niveaux)
+#      - reg_null  : Arrived ~ 1
+#      - chi² global : anova(reg_null, reg_full, test="Chisq")
+#      - chi² pour chaque niveau vs contrôle : anova(mod_sans_ce_niveau, mod_full)
+# =====================================================================================
+
+run_3levels_chi2 <- function(dat, levels_vec, labels_vec, espece_label){
+  dat <- subset(dat, Intensity %in% levels_vec)
+  dat$G <- factor(dat$Intensity, levels = levels_vec, labels = labels_vec)
+  
+  # Modèles
+  reg_null <- glm(cbind(Arrived, 1-Arrived) ~ 1, family=binomial, data=dat)
+  reg_full <- glm(cbind(Arrived, 1-Arrived) ~ G, family=binomial, data=dat)
+  
+  # Chi² global (effet du groupe à 3 niveaux)
+  chi2_lr(reg_null, reg_full,
+          label=paste0(espece_label, " | Test global (", paste(labels_vec, collapse=" vs "), ")"))
+  
+  # Chi² "niveau par niveau" : on teste l'utilité de chaque contraste vs contrôle
+  # (en enlevant un contraste à la fois)
+  # Contrôle = premier niveau de G
+  # Modèle sans contraste I1 (équiv: reg ~ 1 + I2 seulement)
+  if (length(levels_vec) == 3){
+    # Modèle sans le 2e niveau (G = I0 + I2)
+    dat$G_no2 <- factor(dat$Intensity,
+                        levels = c(levels_vec[1], levels_vec[3]),
+                        labels = c(labels_vec[1], labels_vec[3]))
+    reg_no2 <- glm(cbind(Arrived, 1-Arrived) ~ G_no2, family=binomial, data=subset(dat, Intensity %in% c(levels_vec[1], levels_vec[3])))
+    # Test : est-ce que rajouter le niveau 2 améliore ? (I1 vs I0)
+    # Pour un vrai test "ajout du niveau 2", on compare :
+    # - modèle sur toutes les données avec 3 niveaux (reg_full)
+    # - modèle sur toutes les données avec 3 niveaux MAIS contrainte I1=I0
+    # => plus simple et standard : utiliser le test de Wald (summary) ou emmeans.
+    # Ici on fait un test chi² propre via drop1() :
+  }
+  
+  # Tests chi² pour chaque terme (Wald/LR) : drop1 = LR test des termes du modèle
+  cat("\n", espece_label, "| Tests Chi² des termes du modèle (drop1, LR)\n")
+  print(drop1(reg_full, test="Chisq"))
+  
+  # Résumé
+  cat("\n", espece_label, "| Coefficients (Wald)\n")
+  print(summary(reg_full))
+}
+
+# ===================== A) Bloc 3 niveaux : I0 vs I1 vs I2 (urticae absent) =====================
+
+# CALIFORNICUS
+run_3levels_chi2(
+  dat = subset(dfI, Species=="californicus"),
+  levels_vec = c(0,1,2),
+  labels_vec = c("I0_control","I1_prey5_urt0","I2_prey10_urt0"),
+  espece_label = "CALIFORNICUS"
+)
+
+# PERSIMILIS
+run_3levels_chi2(
+  dat = subset(dfI, Species=="persimilis"),
+  levels_vec = c(0,1,2),
+  labels_vec = c("I0_control","I1_prey5_urt0","I2_prey10_urt0"),
+  espece_label = "PERSIMILIS"
+)
+
+# ===================== B) Bloc 3 niveaux : I0 vs I3 vs I4 (urticae présent) =====================
+
+# CALIFORNICUS
+run_3levels_chi2(
+  dat = subset(dfI, Species=="californicus"),
+  levels_vec = c(0,3,4),
+  labels_vec = c("I0_control","I3_prey5_urt1","I4_prey10_urt1"),
+  espece_label = "CALIFORNICUS"
+)
+
+# PERSIMILIS
+run_3levels_chi2(
+  dat = subset(dfI, Species=="persimilis"),
+  levels_vec = c(0,3,4),
+  labels_vec = c("I0_control","I3_prey5_urt1","I4_prey10_urt1"),
+  espece_label = "PERSIMILIS"
+)
 
