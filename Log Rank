@@ -1,1 +1,163 @@
+packages <- c("readxl", "survival", "survminer", "dplyr")
+inst <- rownames(installed.packages())
+install.packages(setdiff(packages, inst))
 
+library(readxl)
+library(survival)
+library(survminer)
+library(dplyr)
+
+
+fichier <- "C:/Mes Documents/Research project/Resultscox.xlsx"
+
+# Lecture de la feuille "Sheet1"
+df <- read_excel(path = fichier)
+
+# Si "Arrived" est déjà codé 0/1, c’est bon.
+# Sinon, tu peux adapter ce mapping :
+# df$Arrived <- recode(df$Arrived, "yes" = 1, "no" = 0)
+
+df$Arrived <- as.integer(df$Arrived)
+
+# A_Time_sec = temps jusqu’à l’arrivée
+df$Temps_max <- as.numeric(df$Temps_max)
+
+# Suppression des lignes sans temps ou info d’arrivée
+df <- df %>%
+  filter(
+    !is.na(Temps_max),
+    !is.na(Arrived),
+    Temps_max < 600
+  )
+
+# Colonnes standard pour survival
+df$time  <- df$Temps_max
+df$event <- df$Arrived
+
+# Types des autres colonnes
+df$Species        <- as.character(df$Species)
+df$Prey_density   <- as.numeric(df$Prey_density)
+df$Urticae_present <- as.numeric(df$Urticae_present)
+
+###############################################
+# 2. Filtre optionnel sur Urticae_present
+###############################################
+
+# Mettre 0 ou 1 pour filtrer, ou NA pour garder tout
+URTICAE_FILTER <- NA  # change en 0 ou 1 si tu veux filtrer
+
+if (!is.na(URTICAE_FILTER)) {
+  df <- df %>% filter(Urticae_present == URTICAE_FILTER)
+}
+
+cat("DataFrame defined, dim:", dim(df), "\n")
+print(head(df))
+
+###############################################
+# 3. Fonction log-rank pour comparer 2 densités
+###############################################
+
+logrank_two_densities <- function(dataframe, d1, d2, label = "") {
+  sub <- dataframe %>% filter(Prey_density %in% c(d1, d2))
+  
+  g1 <- sub %>% filter(Prey_density == d1)
+  g2 <- sub %>% filter(Prey_density == d2)
+  
+  cat("\n====================================\n")
+  cat("Log-rank density", d1, "vs", d2, label, "\n")
+  cat("====================================\n")
+  cat("n density", d1, "=", nrow(g1), "/ n density", d2, "=", nrow(g2), "\n")
+  
+  if (nrow(g1) == 0 || nrow(g2) == 0) {
+    cat("⚠️ Not enough data for this comparison.\n")
+    return(NULL)
+  }
+  
+  # On crée un facteur binaire de densité
+  sub$Density_factor <- factor(sub$Prey_density, levels = c(d1, d2),
+                               labels = c(paste0("d", d1), paste0("d", d2)))
+  
+  # Test de log-rank avec survdiff
+  fit <- survdiff(Surv(time, event) ~ Density_factor, data = sub)
+  
+  # p-value (χ² avec df = nb groupes - 1)
+  pval <- 1 - pchisq(fit$chisq, length(fit$n) - 1)
+  
+  cat("chisq =", fit$chisq, " df =", length(fit$n) - 1,
+      " p-value =", pval, "\n")
+  
+  return(list(fit = fit, p.value = pval))
+}
+
+###############################################
+# 4. Comparaisons de densité (tous prédateurs)
+###############################################
+
+res_0_5  <- logrank_two_densities(df, 0, 5)
+res_0_10 <- logrank_two_densities(df, 0, 10)
+res_5_10 <- logrank_two_densities(df, 5, 10)
+
+###############################################
+# 5. Comparaisons par espèce
+###############################################
+
+for (sp in c("persimilis", "californicus")) {
+  sub_sp <- df %>% filter(Species == sp)
+  
+  cat("\n####################################\n")
+  cat("Species:", sp, "\n")
+  cat("####################################\n")
+  
+  logrank_two_densities(sub_sp, 0, 5,  label = paste0("(", sp, ")"))
+  logrank_two_densities(sub_sp, 0, 10, label = paste0("(", sp, ")"))
+  logrank_two_densities(sub_sp, 5, 10, label = paste0("(", sp, ")"))
+}
+
+###############################################
+# 6. Courbes de Kaplan–Meier
+###############################################
+
+# a) Courbes de survie par espèce
+fit_species <- survfit(Surv(time, event) ~ Species, data = df)
+
+ggsurvplot(
+  fit_species,
+  data = df,
+  conf.int   = TRUE,    #active les bandes de confiance
+  xlab       = "Time (s)",
+  ylab       = "Probability of not having arrived yet",
+  title      = "Survival curves by species",
+  legend.title = "Species"
+)
+
+# b) Courbes de survie par densité de proies
+df$Prey_density_factor <- factor(df$Prey_density)
+
+fit_density <- survfit(Surv(time, event) ~ Prey_density_factor, data = df)
+
+ggsurvplot(
+  fit_density,
+  data = df,
+  conf.int = TRUE,
+  xlab = "Time (s)",
+  ylab = "Probability of not having arrived yet",
+  title = "Survival curves by prey density",
+  legend.title = "Prey density"
+)
+
+# c) Courbes de survie par densité de proies *dans chaque espèce*
+for (sp in unique(df$Species)) {
+  df_sp <- df %>% filter(Species == sp)
+  
+  fit_sp <- survfit(Surv(time, event) ~ Prey_density_factor, data = df_sp)
+  
+  ggsurvplot(
+    fit_sp,
+    data = df_sp,
+    conf.int = TRUE,
+    xlab = "Time (s)",
+    ylab = "Probability of not having arrived yet",
+    title = paste("Survival curves for", sp),
+    legend.title = "Prey density"
+  )
+}
