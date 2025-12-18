@@ -1,1 +1,231 @@
 
+library(survival)
+library(survminer)
+library(dplyr)
+library(readr)
+
+time_cutoff <- 3600
+
+df <- read_delim("Final Results.csv", delim = ";", show_col_types = FALSE)
+
+
+df_global <- df %>%
+  filter(Species %in% c("californicus", "persimilis")) %>%
+  mutate(
+
+    Time_Clean = as.numeric(gsub(",", ".", as.character(Temps_max))),
+    
+   
+    Status = case_when(
+      Arrived == 1 & Time_Clean <= time_cutoff ~ 1,
+      TRUE ~ 0
+    ),
+        Time_Obs = case_when(
+      Status == 1 ~ Time_Clean,
+      TRUE ~ time_cutoff
+    ),
+    
+    # We create a variable with 5 levels of intensity [0 = no signal C0, P0)(control) ; 1 = HIPVs after 5 preys (CA5, PA5) ; 2 = HIPVs 10 preys (CA10, PA10)]
+    # 3 = 5 prey present (CP5, PP5) ; 4 = 10 preys present (CP10, PP10)
+
+
+
+    Global_Intensity = case_when(
+      treatment %in% c("C0", "P0") ~ 0,
+      treatment %in% c("CA5", "PA5") ~ 1,
+      treatment %in% c("CA10", "PA10") ~ 2,
+      treatment %in% c("CP5", "PP5") ~ 3,
+      treatment %in% c("CP10", "PP10") ~ 4
+    ),
+    
+   
+    Global_Intensity_f = factor(Global_Intensity, levels = 0:4,
+                                labels = c("Control (0)", "Odor (5)", "Odor (10)", "Prey (5)", "Prey (10)"))
+  ) %>%
+  filter(!is.na(Time_Obs)) # Sécurité
+
+
+cat(">>> ANALYSE COX : EFFET DU SIGNAL (Toutes espèces confondues) <<<\n")
+cat("Référence = Control (0)\n\n")
+
+
+cox_global <- coxph(Surv(Time_Obs, Status) ~ Global_Intensity_f, data = df_global)
+
+print(summary(cox_global))
+
+# Checking hazard ratio assumption with Schoenfeld residuals
+print(cox.zph(cox_global))
+
+
+# Kaplan Meier curves
+
+fit_global <- survfit(Surv(Time_Obs, Status) ~ Global_Intensity_f, data = df_global)
+
+# Plot
+ggsurvplot(
+  fit_global,
+  data = df_global,
+  risk.table = TRUE,
+  pval = TRUE,             
+  conf.int = FALSE,        
+  xlab = "Time (s)",
+  ylab = "Survival Probability (Non-arrival)",
+  title = "Impact of Signal Intensity/Type (Pooled Species)",
+  legend.title = "Signal Type",
+  ggtheme = theme_minimal()
+)
+
+
+library(ggplot2)
+
+# figure without error bars
+res_data <- data.frame(
+  Species = factor(c(rep("N. californicus", 4), rep("P. persimilis", 4)),
+                   levels = c("N. californicus", "P. persimilis")),
+  
+  Treatment = factor(c("Odor (5)", "Odor (10)", "Prey (5)", "Prey (10)",
+                       "Odor (5)", "Odor (10)", "Prey (5)", "Prey (10)"),
+                     levels = c("Prey (10)", "Prey (5)", "Odor (10)", "Odor (5)")),
+  
+  HR = c(1.33, 1.28, 1.30, 2.73,   # HR Californicus
+         1.58, 1.13, 1.13, 0.94),  # HR Persimilis
+
+  P_val = c(0.663, 0.701, 0.683, 0.106, 
+            0.398, 0.830, 0.825, 0.915),
+  
+  Significance = c("NS", "NS", "NS", "Trend", 
+                   "NS", "NS", "NS", "NS")
+)
+
+
+res_data$Label <- paste0("HR=", round(res_data$HR, 2), "\n(p=", res_data$P_val, ")")
+
+
+ggplot(res_data, aes(x = HR, y = Treatment, color = Significance)) +
+  
+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  
+  # dots
+  geom_point(size = 5) +
+
+  facet_wrap(~ Species) +
+  
+  # Colours
+  scale_color_manual(values = c("NS" = "#444457", "Trend" = "#E74C3C")) +
+  
+  # Theme
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    legend.position = "bottom",
+    strip.text = element_text(face = "italic", size = 12, color = "black")
+  ) +
+  
+  # Titles
+  labs(
+    title = "Arrival rate: control vs treatments (Cox Model)",
+    subtitle = "Hazard Ratio > 1 indicates attraction",
+    x = "Hazard Ratio (Risk of crossing)",
+    y = "",
+    color = "Significance"
+  ) +
+
+  geom_text(aes(label = Label), 
+            vjust = -0.5, 
+            size = 3, 
+            lineheight = 0.9, 
+            show.legend = FALSE) +
+  
+
+  scale_x_continuous(expand = expansion(mult = 0.2))
+
+
+
+
+
+# graph with error bars
+
+library(ggplot2)
+
+
+
+res_data <- data.frame(
+  Species = factor(c(rep("N. californicus", 4), rep("P. persimilis", 4)),
+                   levels = c("N. californicus", "P. persimilis")),
+  
+  Treatment = factor(c("Absent (5)", "Absent (10)", "Present (5)", "Present (10)",
+                       "Absent (5)", "Absent (10)", "Present (5)", "Present (10)"),
+                     levels = c("Present (10)", "Present (5)", "Absent (10)", "Absent (5)")),
+  
+  HR = c(1.33, 1.28, 1.30, 2.73,   # HR Californicus
+         1.58, 1.13, 1.13, 0.94),  # HR Persimilis
+  
+  # lower error bar
+  CI_min = c(0.37, 0.36, 0.37, 0.81, 
+             0.55, 0.38, 0.38, 0.30),
+  
+  # upper error bar
+  CI_max = c(4.70, 4.56, 4.62, 9.21, 
+             4.58, 3.36, 3.37, 2.92),
+  
+  P_val = c(0.663, 0.701, 0.683, 0.106, 
+            0.398, 0.830, 0.825, 0.915),
+  
+  Significance = c("NS", "NS", "NS", "Trend", 
+                   "NS", "NS", "NS", "NS")
+)
+
+
+res_data$Label <- paste0("HR=", round(res_data$HR, 2), "\n(p=", res_data$P_val, ")")
+
+
+ggplot(res_data, aes(x = HR, y = Treatment, color = Significance)) +
+  
+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  
+  # error bars
+  geom_errorbar(aes(xmin = CI_min, xmax = CI_max), 
+                width = 0.2,        # Hauteur des petits taquets aux extrémités
+                color = "gray60",   # Couleur grise pour ne pas surcharger
+                size = 0.8) +
+  
+  # Points (Hazard Ratios)
+  geom_point(size = 5) +
+  
+  # Facets par espèce
+  facet_wrap(~ Species) +
+  
+  # Couleurs
+  scale_color_manual(values = c("NS" = "#444457", "Trend" = "#E74C3C")) +
+  
+  # Thème
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    legend.position = "bottom",
+    strip.text = element_text(face = "italic", size = 12, color = "black")
+  ) +
+  
+  # Titres
+  labs(
+    title = "Arrival rate: control vs treatments (Cox Model)",
+    subtitle = "Points represent Hazard Ratios. Bars represent 95% Confidence Intervals.",
+    x = "Hazard Ratio (Risk of crossing)",
+    y = "",
+    color = "Significance"
+  ) +
+  
+  # Étiquettes de texte
+  geom_text(aes(label = Label), 
+            vjust = -0.8, 
+            size = 3, 
+            lineheight = 0.9, 
+            show.legend = FALSE) +
+  
+
+  scale_x_continuous(limits = c(0, 10), breaks = seq(0, 10, 2))
+
